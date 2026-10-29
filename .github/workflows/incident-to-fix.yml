@@ -1,0 +1,44 @@
+name: Incident-to-Fix
+
+# Runs when the workflow named "CI" fails. Rename "CI" to match your pipeline.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  fix:
+    # Same-repo runs only (fork code must never see our secrets), and never react to our own fix branches.
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      !startsWith(github.event.workflow_run.head_branch, 'fix/')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+      NEBIUS_MODEL: ${{ vars.NEBIUS_MODEL }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      TEST_CMD: ${{ vars.TEST_CMD }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0 # git blame needs history
+
+      - name: Download the failed log
+        run: gh run view "$RUN_ID" --log-failed > ci.log
+
+      - name: Fix, verify, open PR
+        run: |
+          : "${TEST_CMD:?set the TEST_CMD repo variable, the agent must verify before committing}"
+          : "${NEBIUS_API_KEY:?set the NEBIUS_API_KEY repo secret}"
+          git config user.name "incident-to-fix[bot]"
+          git config user.email "incident-to-fix@users.noreply.github.com"
+          python3 agent.py . ci.log --test "$TEST_CMD" --pr
