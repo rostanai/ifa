@@ -90,8 +90,11 @@ Safety:
 - It only reacts to failures from branches in the same repository (never forks, which must not see your secrets), and ignores `fix/*` branches so it can't loop.
 - The agent runs from your default branch, not from the branch under test, so a pushed branch can't swap in its own agent.
 - CI logs are untrusted input. The agent only edits files that git tracks inside the repo, and never anything under `.git/` or `.github/`.
-- Model-written code is run by your tests with every `*KEY*`, `*TOKEN*`, `*SECRET*` and `*PASSWORD*` variable removed from the environment.
+- No job holds both untrusted code and a secret. `propose` has the model key but runs no repo code. `verify` runs your tests with no secrets and a read-only token. `pr` has the write token but runs no tests, and works from a fresh checkout.
+- The proposal passed between jobs is re-validated before use: path must be a tracked file inside the repo, and the commit id must be hex.
+- Outside the Action (local one-shot runs), your tests run with `*KEY*`, `*TOKEN*`, `*SECRET*` and `*PASSWORD*` variables removed from their environment. That is a convenience, not a sandbox: a process of the same user can still read its parent's environment, so don't run untrusted repos locally with real keys.
 - It opens a PR for a human to review and never merges anything.
+- Third-party actions are pinned to major versions (`@v4`); pin to commit SHAs if you need stricter supply-chain control.
 
 ## Configuration
 

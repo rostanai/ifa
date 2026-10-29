@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Incident-to-fix agent: CI log -> suspect commit -> Nemotron fix -> verified branch/PR.
 
-usage: agent.py REPO LOGFILE [--test "cmd"] [--pr]      agent.py --selftest
+usage: agent.py REPO LOGFILE [--test "cmd"] [--pr]      one-shot (local)
+       agent.py REPO LOGFILE --propose out.json         step 1: model call only, runs no repo code
+       agent.py REPO --apply out.json [--test "cmd"]    step 2/3: apply + verify/commit, needs no model key
+       agent.py --selftest
 env:   NEBIUS_API_KEY (required), NEBIUS_MODEL, TAVILY_API_KEY (optional doc lookup)
 """
 import json, os, re, shlex, subprocess, sys, urllib.error, urllib.request
@@ -71,7 +74,8 @@ def safe_path(repo, path):
     return rel
 
 
-def run(repo, logfile, test=None, pr=False):
+def propose(repo, logfile, out=None):
+    """Needs the model key and never executes repo code. Returns (and optionally saves) the proposed fix."""
     log = open(logfile).read()
     path, line, error = parse_log(log)
     if not path:
@@ -85,11 +89,22 @@ def run(repo, logfile, test=None, pr=False):
     source = open(os.path.join(repo, path)).read()
     fix = ask_model(error, path, source, culprit, docs_lookup(error))
     print(f"[4] nemotron  {fix['explanation']}")
+    prop = {"path": path, "content": fix["new_content"].rstrip("\n") + "\n", "sha": sha,
+            "error": error, "culprit": culprit, "explanation": fix["explanation"]}
+    if out:
+        json.dump(prop, open(out, "w"))
+    return prop
 
+
+def apply(repo, prop, test=None, pr=False):
+    """Needs no model key. Re-checks everything in the proposal file, so a tampered file cannot escape the repo."""
+    path, sha, error, culprit = safe_path(repo, prop["path"]), prop["sha"], prop["error"], prop["culprit"]
+    if not re.fullmatch(r"[0-9a-f]{4,40}|unknown", sha):
+        sys.exit(f"refusing odd commit id in proposal: {sha!r}")
     branch = f"fix/{sha}"
     sh("git", "checkout", "-b", branch, cwd=repo)
-    open(os.path.join(repo, path), "w").write(fix["new_content"].rstrip("\n") + "\n")
-    if test:  # verify before we claim a fix; model-written code runs here, so keep our secrets out of its env
+    open(os.path.join(repo, path), "w").write(prop["content"])
+    if test:  # model-written code runs here: in the Action this step has no secrets; locally we scrub the env
         env = {k: v for k, v in os.environ.items() if not re.search(r"KEY|TOKEN|SECRET|PASSWORD", k, re.I)}
         ok = subprocess.run(shlex.split(test), cwd=repo, env=env, capture_output=True).returncode == 0
         print(f"[5] verify    {'tests pass' if ok else 'tests STILL FAIL - reverting'}")
@@ -97,7 +112,7 @@ def run(repo, logfile, test=None, pr=False):
             sh("git", "checkout", "-", cwd=repo)
             sh("git", "branch", "-D", branch, cwd=repo)
             sys.exit(1)
-    sh("git", "commit", "-am", f"fix: {error[:60]}\n\nRegression from {culprit}.\n{fix['explanation']}", cwd=repo)
+    sh("git", "commit", "-am", f"fix: {error[:60]}\n\nRegression from {culprit}.\n{prop['explanation']}", cwd=repo)
     print(sh("git", "show", "--stat", "--patch", "HEAD", cwd=repo).stdout)
     if pr:  # ponytail: assumes gh is authed and a remote exists
         sh("git", "push", "-u", "origin", branch, cwd=repo)
@@ -130,7 +145,12 @@ def selftest():
 
 if __name__ == "__main__":
     a = sys.argv[1:]
+    opt = lambda f: a[a.index(f) + 1] if f in a else None
     if a[:1] == ["--selftest"]:
         selftest()
-    else:
-        run(a[0], a[1], a[a.index("--test") + 1] if "--test" in a else None, "--pr" in a)
+    elif "--propose" in a:  # step 1 (has the model key, runs no repo code)
+        propose(a[0], a[1], opt("--propose"))
+    elif "--apply" in a:  # step 2/3 (no model key); with --test it verifies, without it only commits
+        apply(a[0], json.load(open(opt("--apply"))), opt("--test"), "--pr" in a)
+    else:  # local one-shot
+        apply(a[0], propose(a[0], a[1]), opt("--test"), "--pr" in a)

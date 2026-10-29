@@ -1,24 +1,32 @@
 name: Incident-to-Fix
 
 # Runs when the workflow named "CI" fails. Rename "CI" to match your pipeline.
+#
+# Three jobs, so that no job has both untrusted code and a secret:
+#   propose  has the model key, runs NO repo code              -> proposal.json
+#   verify   runs your tests, has NO secrets, read-only token  -> pass/fail
+#   pr       has the write token, fresh checkout, runs NO tests -> branch + PR
 on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
 
-permissions:
-  contents: write
-  pull-requests: write
-  actions: read
+permissions: {}
+
+env:
+  SHA: ${{ github.event.workflow_run.head_sha }}
 
 jobs:
-  fix:
+  propose:
     # Same-repo runs only (fork code must never see our secrets), and never react to our own fix branches.
     if: >
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       !startsWith(github.event.workflow_run.head_branch, 'fix/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       # Trusted agent code comes from the default branch, so a pushed branch cannot swap in its own agent.
       - uses: actions/checkout@v4
@@ -26,36 +34,85 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           path: trusted
           persist-credentials: false
-
-      # Code under test: no stored credentials; full history for git blame.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.SHA }}
           path: code
-          fetch-depth: 0
+          fetch-depth: 0 # git blame needs history
           persist-credentials: false
-
       - name: Download the failed log
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: gh run view "$RUN_ID" --log-failed > ci.log
-
-      # Only this step sees the model keys. The agent strips KEY/TOKEN/SECRET vars before running your tests.
-      - name: Fix and verify
+      - name: Ask the model for a fix (reads files, executes nothing from the repo)
         env:
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
           NEBIUS_MODEL: ${{ vars.NEBIUS_MODEL }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+        run: |
+          : "${NEBIUS_API_KEY:?set the NEBIUS_API_KEY repo secret}"
+          python3 trusted/agent.py code ci.log --propose proposal.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proposal
+          path: proposal.json
+
+  verify:
+    needs: propose
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read-only, and no secrets are passed to any step in this job
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+          path: code
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: proposal
+      - name: Apply the fix and run your tests (untrusted code runs here, with no secrets)
+        env:
           TEST_CMD: ${{ vars.TEST_CMD }}
         run: |
           : "${TEST_CMD:?set the TEST_CMD repo variable, the agent must verify before committing}"
-          : "${NEBIUS_API_KEY:?set the NEBIUS_API_KEY repo secret}"
           git -C code config user.name "incident-to-fix[bot]"
           git -C code config user.email "incident-to-fix@users.noreply.github.com"
-          python3 trusted/agent.py code ci.log --test "$TEST_CMD"
+          python3 trusted/agent.py code --apply proposal.json --test "$TEST_CMD"
 
-      # Runs only if the fix verified. The PR is for a human to review; nothing is merged automatically.
+  pr:
+    needs: verify # only runs if the tests passed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+      # Fresh checkout: nothing from the verify job's untrusted test run carries over into this job.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+          path: code
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: proposal
+      - name: Commit the proposal (no tests, no repo code executed)
+        run: |
+          git -C code config core.hooksPath /dev/null
+          git -C code config user.name "incident-to-fix[bot]"
+          git -C code config user.email "incident-to-fix@users.noreply.github.com"
+          python3 trusted/agent.py code --apply proposal.json
       - name: Push branch and open PR
         working-directory: code
         env:
@@ -63,5 +120,5 @@ jobs:
         run: |
           BRANCH="$(git branch --show-current)"
           gh auth setup-git
-          git push -u origin "$BRANCH"
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false push -u origin "$BRANCH"
           gh pr create --fill --head "$BRANCH"
