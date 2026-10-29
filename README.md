@@ -23,9 +23,16 @@ CI log ──► 1 parse ──► 2 git blame ──► 3 Tavily docs ──►
 
 ## Nebius and NVIDIA usage
 
-- Inference runs through **Nebius Token Factory**'s OpenAI-compatible chat completions API.
-- The model is an **NVIDIA open-source Nemotron model**, chosen with `NEBIUS_MODEL`.
-- **Tavily** supplies live documentation lookup.
+**NVIDIA Nemotron.** The reasoning step uses `nvidia/nemotron-3-super-120b-a12b`, an NVIDIA open model. It receives the error, the culprit commit and the failing file, and returns an explanation plus the corrected file as JSON (temperature 0, no fine-tuning, prompt only). The model is chosen with `NEBIUS_MODEL`, so any other Nemotron model on Token Factory can be swapped in.
+
+**Nebius Token Factory.** All inference runs through Token Factory's OpenAI-compatible chat completions API (`https://api.tokenfactory.nebius.com/v1`). Where it helped:
+- Hosted access to NVIDIA open models behind one endpoint: no GPU provisioning, drivers or model serving to set up.
+- The OpenAI-compatible API let the agent stay a single standard-library Python file with zero SDK dependencies.
+- The `/v1/models` endpoint lists the available NVIDIA models, which made it easy to pick and verify a model ID.
+
+Nebius services used: Token Factory only. No GPU instances or other Nebius products.
+
+**Tavily (optional, off by default).** If `TAVILY_API_KEY` is set, the agent also looks up the error text on Tavily and adds the results to the prompt. The demos in this repo were run without it.
 
 ## Quick start
 
@@ -132,3 +139,7 @@ make_doc.py           generates the Word submission write-up
 ## Security
 
 Never commit API keys. Keep them in environment variables or in a git-ignored file (`resource/` is ignored here).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
