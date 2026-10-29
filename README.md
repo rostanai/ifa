@@ -86,7 +86,12 @@ Setup in your repo (Settings):
 3. **Actions > General > Workflow permissions:** enable "Allow GitHub Actions to create and approve pull requests".
 4. Copy `agent.py` and the workflow file into the repo, and rename `"CI"` in the workflow to match your pipeline.
 
-Safety: it only reacts to failures from branches in the same repository (never forks, which must not see your secrets), and ignores `fix/*` branches so it can't loop.
+Safety:
+- It only reacts to failures from branches in the same repository (never forks, which must not see your secrets), and ignores `fix/*` branches so it can't loop.
+- The agent runs from your default branch, not from the branch under test, so a pushed branch can't swap in its own agent.
+- CI logs are untrusted input. The agent only edits files that git tracks inside the repo, and never anything under `.git/` or `.github/`.
+- Model-written code is run by your tests with every `*KEY*`, `*TOKEN*`, `*SECRET*` and `*PASSWORD*` variable removed from the environment.
+- It opens a PR for a human to review and never merges anything.
 
 ## Configuration
 

@@ -59,13 +59,24 @@ Fix the root cause with the smallest change. Reply with JSON only:
     return json.loads(re.search(r"\{.*\}", text, re.S).group(0))
 
 
+def safe_path(repo, path):
+    """The log is attacker-influenced: only ever touch tracked files inside the repo (never .git/.github)."""
+    root = os.path.realpath(repo)
+    real = os.path.realpath(path if os.path.isabs(path) else os.path.join(repo, path))
+    rel = os.path.relpath(real, root)
+    if os.path.commonpath([real, root]) != root or rel.split(os.sep)[0] in (".git", ".github"):
+        sys.exit(f"refusing path outside the repo or under .git/.github: {path}")
+    if sh("git", "ls-files", "--error-unmatch", rel, cwd=repo).returncode:
+        sys.exit(f"refusing file not tracked by git: {rel}")
+    return rel
+
+
 def run(repo, logfile, test=None, pr=False):
     log = open(logfile).read()
     path, line, error = parse_log(log)
     if not path:
         sys.exit(f"no project stack frame in log; error: {error}")
-    path = os.path.relpath(os.path.realpath(path if os.path.isabs(path) else os.path.join(repo, path)),
-                           os.path.realpath(repo))
+    path = safe_path(repo, path)
     blame = sh("git", "blame", "-L", f"{line},{line}", "--porcelain", path, cwd=repo).stdout.split()
     sha = blame[0][:8] if blame else "unknown"
     culprit = sh("git", "show", "-s", "--format=%h %an: %s", sha, cwd=repo).stdout.strip()
@@ -78,8 +89,9 @@ def run(repo, logfile, test=None, pr=False):
     branch = f"fix/{sha}"
     sh("git", "checkout", "-b", branch, cwd=repo)
     open(os.path.join(repo, path), "w").write(fix["new_content"].rstrip("\n") + "\n")
-    if test:  # verify before we claim a fix
-        ok = subprocess.run(shlex.split(test), cwd=repo, capture_output=True).returncode == 0
+    if test:  # verify before we claim a fix; model-written code runs here, so keep our secrets out of its env
+        env = {k: v for k, v in os.environ.items() if not re.search(r"KEY|TOKEN|SECRET|PASSWORD", k, re.I)}
+        ok = subprocess.run(shlex.split(test), cwd=repo, env=env, capture_output=True).returncode == 0
         print(f"[5] verify    {'tests pass' if ok else 'tests STILL FAIL - reverting'}")
         if not ok:
             sh("git", "checkout", "-", cwd=repo)
@@ -101,6 +113,18 @@ def selftest():
     assert parse_log(node)[:2] == ("/r/user.js", 2), parse_log(node)
     gh = 'test\tRun\t2026-10-29T06:00:00Z Traceback (most recent call last):\ntest\tRun\t2026-10-29T06:00:00Z   File "/home/runner/work/ifa/ifa/calc.py", line 2, in average\ntest\tRun\t2026-10-29T06:00:00Z ZeroDivisionError: division by zero\n'
     assert parse_log(gh) == ("/home/runner/work/ifa/ifa/calc.py", 2, "ZeroDivisionError: division by zero"), parse_log(gh)
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        sh("git", "init", "-q", cwd=d)
+        open(f"{d}/a.py", "w").close(); open(f"{d}/untracked.py", "w").close()
+        os.makedirs(f"{d}/.github"); open(f"{d}/.github/w.yml", "w").close()
+        sh("git", "add", "a.py", ".github/w.yml", cwd=d)
+        assert safe_path(d, f"{d}/a.py") == "a.py"
+        for bad in ("../../etc/passwd", "/etc/passwd", "untracked.py", ".github/w.yml", ".git/config"):
+            try:
+                safe_path(d, bad); raise AssertionError(f"accepted {bad}")
+            except SystemExit:
+                pass
     print("selftest ok")
 
 

@@ -19,26 +19,49 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository &&
       !startsWith(github.event.workflow_run.head_branch, 'fix/')
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-      NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
-      NEBIUS_MODEL: ${{ vars.NEBIUS_MODEL }}
-      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-      TEST_CMD: ${{ vars.TEST_CMD }}
-      RUN_ID: ${{ github.event.workflow_run.id }}
     steps:
+      # Trusted agent code comes from the default branch, so a pushed branch cannot swap in its own agent.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+
+      # Code under test: no stored credentials; full history for git blame.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0 # git blame needs history
+          path: code
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Download the failed log
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         run: gh run view "$RUN_ID" --log-failed > ci.log
 
-      - name: Fix, verify, open PR
+      # Only this step sees the model keys. The agent strips KEY/TOKEN/SECRET vars before running your tests.
+      - name: Fix and verify
+        env:
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          NEBIUS_MODEL: ${{ vars.NEBIUS_MODEL }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          TEST_CMD: ${{ vars.TEST_CMD }}
         run: |
           : "${TEST_CMD:?set the TEST_CMD repo variable, the agent must verify before committing}"
           : "${NEBIUS_API_KEY:?set the NEBIUS_API_KEY repo secret}"
-          git config user.name "incident-to-fix[bot]"
-          git config user.email "incident-to-fix@users.noreply.github.com"
-          python3 agent.py . ci.log --test "$TEST_CMD" --pr
+          git -C code config user.name "incident-to-fix[bot]"
+          git -C code config user.email "incident-to-fix@users.noreply.github.com"
+          python3 trusted/agent.py code ci.log --test "$TEST_CMD"
+
+      # Runs only if the fix verified. The PR is for a human to review; nothing is merged automatically.
+      - name: Push branch and open PR
+        working-directory: code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="$(git branch --show-current)"
+          gh auth setup-git
+          git push -u origin "$BRANCH"
+          gh pr create --fill --head "$BRANCH"
