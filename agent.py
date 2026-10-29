@@ -10,7 +10,7 @@ env:   NEBIUS_API_KEY (required), NEBIUS_MODEL, TAVILY_API_KEY (optional doc loo
 import json, os, re, shlex, subprocess, sys, urllib.error, urllib.request
 
 BASE = os.getenv("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1")
-MODEL = os.getenv("NEBIUS_MODEL", "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1")  # NVIDIA open model
+MODEL = os.getenv("NEBIUS_MODEL", "nvidia/nemotron-3-super-120b-a12b")  # NVIDIA open model, verified on Token Factory
 
 
 def sh(*args, cwd):

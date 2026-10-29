@@ -33,7 +33,7 @@ Requires Python 3.9+ and git. No packages to install; the agent uses only the st
 
 ```bash
 export NEBIUS_API_KEY=...        # Nebius Token Factory key
-export NEBIUS_MODEL=...          # exact NVIDIA Nemotron model ID from the Nebius model list
+export NEBIUS_MODEL=nvidia/nemotron-3-super-120b-a12b   # optional, this is the default
 export TAVILY_API_KEY=...        # optional
 
 python3 agent.py --selftest      # offline check of log parsing
@@ -62,10 +62,12 @@ Example output:
 ```
 [1] failure   TypeError: Cannot read properties of undefined (reading 'name')
 [2] location  user.js:2
-[3] suspect   c244c96 Dev: refactor: simplify displayName()
-[4] nemotron  ...Optional chaining safely returns undefined for missing properties...
+[3] suspect   d26df28 Dev: refactor: simplify displayName()
+[4] nemotron  Added guards to ensure `u` and `u.profile` are defined before accessing `name`...
 [5] verify    tests pass
 ```
+
+Both demos were run on Nebius Token Factory with `nvidia/nemotron-3-super-120b-a12b`.
 
 ### Use it on your own repo
 
@@ -102,7 +104,7 @@ Safety:
 |---|---|---|
 | `NEBIUS_API_KEY` | API key (required) | none |
 | `NEBIUS_BASE_URL` | OpenAI-compatible endpoint | `https://api.tokenfactory.nebius.com/v1` |
-| `NEBIUS_MODEL` | Model ID | an NVIDIA Nemotron ID; set this to a name from your model list |
+| `NEBIUS_MODEL` | Model ID | `nvidia/nemotron-3-super-120b-a12b` (verified on Token Factory) |
 | `TAVILY_API_KEY` | Enables documentation lookup | off |
 
 ## Limitations

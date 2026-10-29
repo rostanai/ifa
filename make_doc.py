@@ -43,7 +43,7 @@ nl([
 h("4. Use of Nebius and NVIDIA (hackathon requirement)")
 bl([
     "Inference runs on Nebius Token Factory through its OpenAI-compatible chat completions API.",
-    "The model is an NVIDIA open-source model (default: Llama-3.1-Nemotron-Ultra-253B, configurable with NEBIUS_MODEL).",
+    "The model is an NVIDIA open-source model (default: nemotron-3-super-120b-a12b, configurable with NEBIUS_MODEL).",
     "Tavily provides live documentation lookup for the Tavily prize.",
 ])
 
@@ -84,8 +84,8 @@ bl([
     "the culprit commit correctly.",
     "Verified end to end: the agent called NVIDIA Nemotron (nemotron-3.5-super-vl-120b-a12b), restored the empty-list "
     "guard, passed the tests and committed the fix on its own branch.",
-    "Not yet verified on Nebius: that run used NVIDIA's hosted endpoint for development. The final demo must be "
-    "re-run with NEBIUS_API_KEY against Nebius Token Factory, with the model ID copied from its model list.",
+    "Verified on Nebius: both the Python and JavaScript demos were run against Nebius Token Factory using the NVIDIA "
+    "model nvidia/nemotron-3-super-120b-a12b, and both fixes passed their tests.",
     "Whole-file rewrite is used instead of diffs for reliability; suited to small and medium files. Large files "
     "would need diff-based patching.",
     "Single failure per run. Multi-failure triage and a GitHub Actions trigger are future work.",
